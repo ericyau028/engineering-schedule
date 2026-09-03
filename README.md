@@ -33,6 +33,6 @@ python server.py
 
 網頁版使用瀏覽器 localStorage 儲存資料：
 
-- 首次打開會讀取 `public/schedule-static.json` 的初始時間表
+- 首次打開會讀取根目錄 `schedule-static.json` 的初始時間表
 - 更新初始資料後執行 `python export_static.py` 再 push
-- GitHub Actions 會自動部署 `public/`
+- GitHub Pages 從 main 分支根目錄發布

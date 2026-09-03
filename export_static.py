@@ -4,7 +4,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
 DATA_FILE = BASE / "data" / "schedule.json"
-OUT_FILE = BASE / "public" / "schedule-static.json"
+OUT_FILE = BASE / "schedule-static.json"
 
 
 def main():

@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 BASE = Path(__file__).resolve().parent
-PUBLIC = BASE / "public"
+PUBLIC = BASE
 DATA = BASE / "data"
 DATA_FILE = DATA / "schedule.json"
 

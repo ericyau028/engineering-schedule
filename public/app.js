@@ -1,0 +1,789 @@
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+const SOON_MS = 30 * 60 * 1000;
+const LOCAL_KEY = "engineering_schedule_v1";
+
+const state = {
+  items: [],
+  offsetMs: 0,
+  storageMode: "remote",
+  editingId: null,
+  bulkConfirm: null,
+  bulkTimer: null,
+};
+
+function serverNow() {
+  return new Date(Date.now() + state.offsetMs);
+}
+
+function parseLocal(iso) {
+  return new Date(iso);
+}
+
+function loadLocalSaved() {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalItems(items) {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(items));
+  } catch {
+    toast("無法儲存到此瀏覽器", true);
+  }
+}
+
+async function loadLocalItems() {
+  const saved = loadLocalSaved();
+  if (Array.isArray(saved)) return saved;
+  try {
+    const res = await fetch("schedule-static.json");
+    if (res.ok) {
+      const data = await res.json();
+      const items = Array.isArray(data) ? data : data.items || [];
+      saveLocalItems(items);
+      return items;
+    }
+  } catch {
+    // 沒有靜態資料時從空表開始
+  }
+  return [];
+}
+
+function nextLetterClient(used) {
+  const usedSet = new Set(used);
+  let i = 0;
+  while (true) {
+    const candidate = i < 26
+      ? String.fromCharCode(97 + i)
+      : "a" + String.fromCharCode(97 + (i - 26));
+    if (!usedSet.has(candidate)) return candidate;
+    i += 1;
+  }
+}
+
+function makeLocalItem(letter, dateStr, timeStr, content, owner, item, stage,
+                       description, endTime, endDate, relation) {
+  const iso = (d, t) => `${d}T${t}:00+08:00`;
+  return {
+    id: `local-${letter}`,
+    letter,
+    date: dateStr,
+    time: timeStr,
+    datetime: iso(dateStr, timeStr),
+    content,
+    owner,
+    item,
+    stage,
+    description,
+    end_time: endTime,
+    end_date: endDate,
+    end_datetime: endTime && endDate ? iso(endDate, endTime) : null,
+    relation,
+    source: "local",
+  };
+}
+
+function addLocalPair(items, payload) {
+  const used = items.map((i) => i.letter);
+  const startLetter = nextLetterClient(used);
+  used.push(startLetter);
+  const endLetter = nextLetterClient(used);
+
+  const [sh, sm] = payload.time.split(":").map(Number);
+  const [eh, em] = payload.end_time.split(":").map(Number);
+  let endDate = payload.date;
+  if (eh * 60 + em <= sh * 60 + sm) {
+    const d = new Date(`${payload.date}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    endDate = d.toISOString().slice(0, 10);
+  }
+
+  const start = makeLocalItem(
+    startLetter, payload.date, payload.time, payload.content, payload.owner,
+    payload.item, "開始", payload.description, payload.end_time, endDate, endLetter,
+  );
+  const end = makeLocalItem(
+    endLetter, endDate, payload.end_time, payload.content, payload.owner,
+    payload.item, "結束", payload.description, null, null, null,
+  );
+  return [start, end];
+}
+
+function updateLocalItem(items, payload) {
+  const item = items.find((i) => i.id === payload.id);
+  if (!item) return [];
+  const iso = (d, t) => `${d}T${t}:00+08:00`;
+  const pairStart = !!item.end_time;
+  const newRelation = payload.relation || null;
+  const relationChanged = newRelation !== (item.relation || null);
+  const target = newRelation
+    ? items.find((x) => x.letter === newRelation) || null
+    : null;
+
+  let endTime = pairStart ? payload.end_time : null;
+  let endDate = null;
+  if (endTime) {
+    endDate = payload.date;
+    const [sh, sm] = payload.time.split(":").map(Number);
+    const [eh, em] = payload.end_time.split(":").map(Number);
+    if (eh * 60 + em <= sh * 60 + sm) {
+      const d = new Date(`${payload.date}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 1);
+      endDate = d.toISOString().slice(0, 10);
+    }
+  }
+
+  item.date = payload.date;
+  item.time = payload.time;
+  item.datetime = iso(payload.date, payload.time);
+  item.content = payload.content;
+  item.owner = payload.owner;
+  item.item = payload.item;
+  item.description = payload.description;
+  item.relation = newRelation;
+  item.end_time = endTime;
+  item.end_date = endDate;
+  item.end_datetime = endTime && endDate ? iso(endDate, endTime) : null;
+
+  if (target && endTime && !relationChanged) {
+    target.date = endDate;
+    target.time = endTime;
+    target.datetime = iso(endDate, endTime);
+    target.content = payload.content;
+    target.owner = payload.owner;
+    target.item = payload.item;
+    target.description = payload.description;
+  }
+
+  return [item, target].filter(Boolean);
+}
+
+function updateModeChip() {
+  const chip = document.getElementById("mode-chip");
+  if (!chip) return;
+  chip.hidden = state.storageMode !== "local";
+  chip.textContent = "網頁版 · 此瀏覽器儲存";
+}
+
+function makeEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function fmtClock(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function dateLabel(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const week = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return `${d} ${MONTHS[m - 1]} ${y} 週${WEEKDAYS[week]}`;
+}
+
+function hkDateString(now) {
+  return new Date(now.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+function durationText(startIso, endIso) {
+  const diff = parseLocal(endIso).getTime() - parseLocal(startIso).getTime();
+  const mins = Math.max(0, Math.round(diff / 60000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h}h ${m}m`;
+}
+
+function itemStatus(item) {
+  const now = serverNow().getTime();
+  const start = parseLocal(item.datetime).getTime();
+  const end = item.end_datetime ? parseLocal(item.end_datetime).getTime() : null;
+  if (end !== null && now >= start && now <= end) return "active";
+  if (now >= start) return "past";
+  if (start - now <= SOON_MS) return "soon";
+  return "future";
+}
+
+function stageClass(stage) {
+  return stage === "結束" ? "stage-end" : "stage-start";
+}
+
+function railColor() {
+  return "#2563eb";
+}
+
+function buildRow(item) {
+  const row = makeEl("div", "row");
+  row.dataset.id = item.id;
+  row.dataset.dt = item.datetime;
+
+  const timeCell = makeEl("div", "time-cell");
+  timeCell.appendChild(makeEl("span", "row-id", item.letter));
+  const stack = makeEl("span", "time-stack");
+  stack.appendChild(makeEl("span", "time-main", item.time));
+  const stage = item.stage || (item.end_time ? "開始" : "結束");
+  stack.appendChild(makeEl("span", `stage-chip ${stageClass(stage)}`, stage));
+  stack.appendChild(makeEl("span", "state-tag"));
+  timeCell.appendChild(stack);
+
+  const contentCell = makeEl("span", "content-cell", item.content || "—");
+  const ownerCell = makeEl("span", "owner-cell", item.owner || "—");
+  const itemCell = makeEl("span", "item-cell", item.item || "—");
+  const desc = makeEl("span", "desc", item.description || "—");
+
+  const endCell = makeEl("span", "end-cell");
+  if (item.end_time) {
+    endCell.appendChild(document.createTextNode(item.end_time));
+    const note = makeEl("span", "end-note", durationText(item.datetime, item.end_datetime));
+    endCell.appendChild(note);
+  } else {
+    endCell.textContent = "—";
+  }
+
+  const relCell = makeEl("span", "rel-link");
+  if (item.relation) {
+    relCell.appendChild(makeEl("span", "rel-arrow", "→"));
+    relCell.appendChild(document.createTextNode(` ${item.relation}`));
+  } else {
+    relCell.textContent = "—";
+  }
+
+  const edit = makeEl("button", "edit-btn", "編輯");
+  edit.type = "button";
+  edit.title = "編輯";
+
+  const del = makeEl("button", "delete-btn", "✕");
+  del.type = "button";
+  del.title = "刪除";
+
+  const actions = makeEl("div", "row-actions");
+  actions.append(edit, del);
+
+  row.append(timeCell, contentCell, ownerCell, itemCell, desc, endCell, relCell, actions);
+  return row;
+}
+
+function render() {
+  const body = document.getElementById("schedule-body");
+  const rail = document.getElementById("rail");
+  body.innerHTML = "";
+  resetBulkConfirm();
+
+  const sorted = [...state.items].sort((a, b) => a.datetime.localeCompare(b.datetime));
+  const relationCount = sorted.filter((i) => i.relation).length;
+  const railW = relationCount ? Math.min(180, 12 + relationCount * 14) : 0;
+  document.documentElement.style.setProperty("--rail-w", `${railW}px`);
+  if (rail) {
+    rail.style.display = relationCount ? "" : "none";
+    rail.style.width = `${railW}px`;
+  }
+
+  const groups = new Map();
+  for (const item of sorted) {
+    if (!groups.has(item.date)) groups.set(item.date, []);
+    groups.get(item.date).push(item);
+  }
+
+  if (sorted.length) {
+    const gridHead = makeEl("div", "grid-head");
+    ["時間", "內容", "負責人", "項目分鐘", "描述", "結束時間", "關聯", ""].forEach((text) => {
+      gridHead.appendChild(makeEl("span", "", text));
+    });
+    body.appendChild(gridHead);
+  }
+
+  const today = hkDateString(serverNow());
+  groups.forEach((rows, date) => {
+    const head = makeEl("div", "date-head");
+    head.appendChild(makeEl("span", "date-label", dateLabel(date)));
+    const count = makeEl("span", "date-count", `${rows.length} 列`);
+    head.appendChild(count);
+    if (date === today) head.appendChild(makeEl("span", "today-chip", "今日"));
+    body.appendChild(head);
+    rows.forEach((item) => body.appendChild(buildRow(item)));
+  });
+
+  if (!sorted.length) {
+    body.appendChild(makeEl("div", "empty-state", "目前沒有時間段"));
+  }
+
+  updateStatuses();
+  renderNextAction();
+  drawRail();
+}
+
+function updateStatuses() {
+  const byId = new Map(state.items.map((i) => [i.id, i]));
+  document.querySelectorAll(".row").forEach((row) => {
+    const item = byId.get(row.dataset.id);
+    if (!item) return;
+    const status = itemStatus(item);
+    row.classList.toggle("is-past", status === "past");
+    row.classList.toggle("is-soon", status === "soon");
+    row.classList.toggle("is-active", status === "active");
+    const tag = row.querySelector(".state-tag");
+    if (tag) {
+      tag.textContent =
+        status === "soon" ? "30 分鐘內" : status === "active" ? "進行中" : status === "past" ? "已過" : "";
+    }
+  });
+}
+
+function renderNextAction() {
+  const el = document.getElementById("next-action");
+  if (!el) return;
+  const soon = state.items
+    .filter((i) => itemStatus(i) === "soon")
+    .sort((a, b) => a.datetime.localeCompare(b.datetime))[0];
+  if (soon) {
+    const owner = soon.owner ? ` · ${soon.owner}` : "";
+    el.textContent = `下一步 ${soon.time} ${soon.content}${owner}`;
+    return;
+  }
+  const active = state.items
+    .filter((i) => itemStatus(i) === "active")
+    .sort((a, b) => a.datetime.localeCompare(b.datetime))[0];
+  if (active) {
+    el.textContent = `進行中 ${active.time} ${active.content} · ${active.owner || "—"}`;
+    return;
+  }
+  el.textContent = "30 分鐘內沒有操作";
+}
+
+function drawRail() {
+  const rail = document.getElementById("rail");
+  const body = document.getElementById("schedule-body");
+  if (!rail || !body) return;
+  rail.innerHTML = "";
+
+  const relations = state.items
+    .filter((i) => i.relation)
+    .sort((a, b) => a.datetime.localeCompare(b.datetime));
+  if (!relations.length) return;
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const laneW = 14;
+  const padX = 6;
+  const railW = Math.min(180, 12 + relations.length * laneW);
+  document.documentElement.style.setProperty("--rail-w", `${railW}px`);
+  rail.style.width = `${railW}px`;
+
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("width", railW);
+  svg.setAttribute("height", body.offsetHeight);
+  rail.appendChild(svg);
+
+  const rowEls = new Map();
+  document.querySelectorAll(".row").forEach((r) => rowEls.set(r.dataset.id, r));
+
+  relations.forEach((item, idx) => {
+    const startEl = rowEls.get(item.id);
+    const target = state.items.find((i) => i.letter === item.relation);
+    const endEl = target ? rowEls.get(target.id) : null;
+    if (!startEl || !endEl) return;
+
+    const y1 = startEl.offsetTop + startEl.offsetHeight / 2;
+    const y2 = endEl.offsetTop + endEl.offsetHeight / 2;
+    const x = padX + idx * laneW + laneW / 2;
+    const color = railColor();
+
+    const line = document.createElementNS(svgNS, "line");
+    line.setAttribute("x1", x);
+    line.setAttribute("y1", y1);
+    line.setAttribute("x2", x);
+    line.setAttribute("y2", y2);
+    line.setAttribute("stroke", color);
+    line.setAttribute("stroke-width", 2);
+    svg.appendChild(line);
+
+    for (const cy of [y1, y2]) {
+      const dot = document.createElementNS(svgNS, "circle");
+      dot.setAttribute("cx", x);
+      dot.setAttribute("cy", cy);
+      dot.setAttribute("r", 3.5);
+      dot.setAttribute("fill", color);
+      dot.setAttribute("stroke", "#fff");
+      dot.setAttribute("stroke-width", 1.5);
+      svg.appendChild(dot);
+    }
+
+    const arrow = document.createElementNS(svgNS, "polygon");
+    arrow.setAttribute("points", `${x - 4},${y2 - 7} ${x + 4},${y2 - 7} ${x},${y2 - 1}`);
+    arrow.setAttribute("fill", color);
+    svg.appendChild(arrow);
+
+    const midY = (y1 + y2) / 2;
+    const label = document.createElementNS(svgNS, "g");
+    label.setAttribute("transform", `translate(${x}, ${midY})`);
+    const text = document.createElementNS(svgNS, "text");
+    text.setAttribute("x", 0);
+    text.setAttribute("y", 4);
+    text.setAttribute("text-anchor", "middle");
+    text.setAttribute("font-size", 11);
+    text.setAttribute("font-weight", 700);
+    text.setAttribute("fill", color);
+    text.setAttribute("stroke", "#fff");
+    text.setAttribute("stroke-width", 3);
+    text.setAttribute("paint-order", "stroke");
+    text.textContent = item.relation;
+    label.appendChild(text);
+    svg.appendChild(label);
+  });
+}
+
+function updateDuration() {
+  const start = document.getElementById("field-time").value;
+  const end = document.getElementById("field-end").value;
+  const label = document.getElementById("duration-label");
+  if (!start || !end) {
+    label.textContent = "--";
+    return;
+  }
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  let mins = eh * 60 + em - (sh * 60 + sm);
+  if (mins <= 0) mins += 24 * 60;
+  label.textContent = `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function updatePreview() {
+  const time = document.getElementById("field-time").value || "--:--";
+  const end = document.getElementById("field-end").value || "--:--";
+  const content = document.getElementById("field-content").value.trim();
+  const owner = document.getElementById("field-owner").value.trim();
+  const item = document.getElementById("field-item").value.trim();
+  const meta = [content, owner, item].filter(Boolean).join(" · ");
+  const suffix = meta ? ` · ${meta}` : "";
+
+  document.getElementById("preview-start-time").textContent = time;
+  document.getElementById("preview-start-op").textContent = "開始" + suffix;
+  document.getElementById("preview-end-time").textContent = end;
+  document.getElementById("preview-end-op").textContent = "結束" + suffix;
+}
+
+function refreshOwnerSuggestions() {
+  const owners = [...new Set(state.items.map((i) => i.owner).filter(Boolean))];
+  const dl = document.getElementById("owner-suggestions");
+  dl.innerHTML = "";
+  owners.forEach((owner) => {
+    const opt = document.createElement("option");
+    opt.value = owner;
+    dl.appendChild(opt);
+  });
+}
+
+function setFormMode(mode, item) {
+  state.editingId = mode === "edit" && item ? item.id : null;
+  const startLike = !!(item && item.end_time);
+  const relationInput = document.getElementById("field-relation");
+  document.getElementById("form-title").textContent = mode === "edit" ? "編輯時間段" : "新增時間段";
+  document.getElementById("submit-btn").textContent = mode === "edit" ? "更新" : "完成";
+  document.getElementById("field-end").disabled = mode === "edit" && !startLike;
+  relationInput.disabled = mode !== "edit";
+  relationInput.placeholder = mode === "edit" ? "例如 c" : "完成時自動產生";
+}
+
+function resetForm() {
+  document.getElementById("entry-form").reset();
+  document.getElementById("field-date").value = hkDateString(serverNow());
+  setFormMode("add");
+  updateDuration();
+  updatePreview();
+}
+
+function startEdit(item) {
+  document.getElementById("field-date").value = item.date;
+  document.getElementById("field-time").value = item.time;
+  document.getElementById("field-content").value = item.content || "";
+  document.getElementById("field-owner").value = item.owner || "";
+  document.getElementById("field-item").value = item.item || "";
+  document.getElementById("field-description").value = item.description || "";
+  document.getElementById("field-end").value = item.end_time || "";
+  document.getElementById("field-relation").value = item.relation || "";
+  setFormMode("edit", item);
+  updateDuration();
+  updatePreview();
+  document.querySelector(".form-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+let toastTimer;
+function toast(msg, isError = false) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.toggle("error", isError);
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function resetBulkConfirm() {
+  clearTimeout(state.bulkTimer);
+  state.bulkTimer = null;
+  state.bulkConfirm = null;
+  const clearBtn = document.getElementById("clear-all-btn");
+  const beforeBtn = document.getElementById("delete-before-btn");
+  if (clearBtn) {
+    clearBtn.textContent = "清空全部";
+    clearBtn.classList.remove("confirming");
+  }
+  if (beforeBtn) {
+    beforeBtn.textContent = "刪除";
+    beforeBtn.classList.remove("confirming");
+  }
+}
+
+function armBulkConfirm(kind, value) {
+  resetBulkConfirm();
+  state.bulkConfirm = { kind, value };
+  const clearBtn = document.getElementById("clear-all-btn");
+  const beforeBtn = document.getElementById("delete-before-btn");
+  if (kind === "all") {
+    clearBtn.textContent = "確認清空全部？";
+    clearBtn.classList.add("confirming");
+  } else {
+    beforeBtn.textContent = "確認刪除？";
+    beforeBtn.classList.add("confirming");
+  }
+  state.bulkTimer = setTimeout(resetBulkConfirm, 3000);
+}
+
+async function performBulkDelete(kind, value) {
+  resetBulkConfirm();
+  try {
+    if (state.storageMode === "local") {
+      const removed = state.items.filter((i) => kind === "all" || i.date <= value);
+      if (!removed.length) {
+        toast("沒有符合的記錄");
+        return;
+      }
+      state.items = state.items.filter((i) => !(kind === "all" || i.date <= value));
+      saveLocalItems(state.items);
+      await loadSchedule();
+      toast(`已刪除 ${removed.length} 列（已儲存到此瀏覽器）`);
+      return;
+    }
+
+    const url = kind === "all"
+      ? "api/schedule?all=1"
+      : `api/schedule?before=${encodeURIComponent(value)}`;
+    const res = await fetch(url, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "刪除失敗");
+    await loadSchedule();
+    toast(`已刪除 ${data.deleted || 0} 列`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function loadSchedule() {
+  let remote = null;
+  try {
+    const res = await fetch("api/schedule");
+    if (res.ok) remote = await res.json();
+  } catch {
+    // 後端不存在時使用網頁版模式
+  }
+  if (remote && Array.isArray(remote.items)) {
+    state.storageMode = "remote";
+    state.items = remote.items;
+    state.offsetMs = parseLocal(remote.now).getTime() - Date.now();
+  } else {
+    state.storageMode = "local";
+    state.items = await loadLocalItems();
+    state.offsetMs = 0;
+  }
+  refreshOwnerSuggestions();
+  render();
+  updateModeChip();
+}
+
+function bindFormEvents() {
+  const form = document.getElementById("entry-form");
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {
+      id: state.editingId,
+      date: document.getElementById("field-date").value,
+      time: document.getElementById("field-time").value,
+      content: document.getElementById("field-content").value.trim(),
+      owner: document.getElementById("field-owner").value.trim(),
+      item: document.getElementById("field-item").value.trim(),
+      description: document.getElementById("field-description").value.trim(),
+      end_time: document.getElementById("field-end").value,
+      relation: document.getElementById("field-relation").value.trim(),
+    };
+    if (!payload.time || !payload.content || !payload.owner || !payload.item) {
+      toast("請填寫所有欄位", true);
+      return;
+    }
+    const editing = Boolean(state.editingId);
+    const editingItem = editing
+      ? state.items.find((i) => i.id === state.editingId)
+      : null;
+    if (editing) {
+      const rel = payload.relation;
+      if (rel && rel === editingItem.letter) {
+        toast("關聯不能指向自己", true);
+        return;
+      }
+      if (rel && !state.items.some((i) => i.id !== editingItem.id && i.letter === rel)) {
+        toast("找不到關聯的字母", true);
+        return;
+      }
+    }
+    const startLike = !!(editingItem && editingItem.end_time);
+    if (!editing || startLike) {
+      if (!payload.end_time) {
+        toast("請填寫所有欄位", true);
+        return;
+      }
+      if (payload.time === payload.end_time) {
+        toast("結束時間不能與開始時間相同", true);
+        return;
+      }
+    }
+    try {
+      if (editing) {
+        if (state.storageMode === "local") {
+          updateLocalItem(state.items, payload);
+          state.items.sort((a, b) => a.datetime.localeCompare(b.datetime));
+          saveLocalItems(state.items);
+          await loadSchedule();
+          resetForm();
+          toast("已更新（已儲存到此瀏覽器）");
+        } else {
+          const res = await fetch(`api/schedule?id=${encodeURIComponent(state.editingId)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "更新失敗");
+          await loadSchedule();
+          resetForm();
+          toast("已更新");
+        }
+      } else if (state.storageMode === "local") {
+        const pair = addLocalPair(state.items, payload);
+        state.items = [...state.items, ...pair].sort((a, b) =>
+          a.datetime.localeCompare(b.datetime),
+        );
+        saveLocalItems(state.items);
+        await loadSchedule();
+        resetForm();
+        toast("已新增 2 個時間段（已儲存到此瀏覽器）");
+      } else {
+        const res = await fetch("api/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "新增失敗");
+        await loadSchedule();
+        resetForm();
+        toast("已新增 2 個時間段");
+      }
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  form.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener("input", () => {
+      updateDuration();
+      updatePreview();
+    });
+    el.addEventListener("change", () => {
+      updateDuration();
+      updatePreview();
+    });
+  });
+
+  document.getElementById("reset-form").addEventListener("click", resetForm);
+
+  document.getElementById("clear-all-btn").addEventListener("click", () => {
+    if (state.bulkConfirm && state.bulkConfirm.kind === "all") {
+      performBulkDelete("all", null);
+      return;
+    }
+    armBulkConfirm("all", null);
+  });
+
+  document.getElementById("delete-before-btn").addEventListener("click", () => {
+    const value = document.getElementById("delete-before-date").value;
+    if (!value) {
+      toast("請選擇日期", true);
+      return;
+    }
+    if (state.bulkConfirm && state.bulkConfirm.kind === "before" && state.bulkConfirm.value === value) {
+      performBulkDelete("before", value);
+      return;
+    }
+    armBulkConfirm("before", value);
+  });
+
+  document.getElementById("schedule-body").addEventListener("click", async (e) => {
+    const relCell = e.target.closest(".rel-link");
+    if (relCell) {
+      const row = relCell.closest(".row");
+      const item = state.items.find((i) => i.id === row.dataset.id);
+      if (item) startEdit(item);
+      return;
+    }
+    const editBtn = e.target.closest(".edit-btn");
+    if (editBtn) {
+      const row = editBtn.closest(".row");
+      const item = state.items.find((i) => i.id === row.dataset.id);
+      if (item) startEdit(item);
+      return;
+    }
+    const btn = e.target.closest(".delete-btn");
+    if (!btn) return;
+    const row = btn.closest(".row");
+    const item = state.items.find((i) => i.id === row.dataset.id);
+    const label = item ? `${item.time} ${item.content}` : row.dataset.id;
+    if (!confirm(`刪除 ${label}？`)) return;
+    try {
+      if (state.storageMode === "local") {
+        state.items = state.items.filter((i) => i.id !== row.dataset.id);
+        saveLocalItems(state.items);
+      } else {
+        const res = await fetch(`api/schedule?id=${encodeURIComponent(row.dataset.id)}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) throw new Error("刪除失敗");
+      }
+      await loadSchedule();
+      toast("已刪除");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
+function init() {
+  bindFormEvents();
+  resetForm();
+  loadSchedule().catch((err) => {
+    toast(err.message, true);
+    document.getElementById("next-action").textContent = "連線失敗";
+  });
+
+  setInterval(() => {
+    document.getElementById("clock").textContent = fmtClock(serverNow());
+    updateStatuses();
+    renderNextAction();
+  }, 1000);
+
+  window.addEventListener("resize", drawRail);
+}
+
+document.addEventListener("DOMContentLoaded", init);

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工程排程表</title>
+  <link rel="stylesheet" href="styles.css?v=20260903a">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">ENG</span>
+      <div class="brand-text">
+        <h1>工程排程表</h1>
+        <p>工程工作時間表</p>
+      </div>
+    </div>
+    <div class="top-status">
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="next-action" id="next-action">正在讀取...</div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel schedule-panel">
+      <div class="panel-head">
+        <h2>時間表</h2>
+        <span class="mode-chip" id="mode-chip" hidden></span>
+        <div class="legend">
+          <span class="legend-item legend-past">過去</span>
+          <span class="legend-item legend-soon">30 分鐘內</span>
+          <span class="legend-item legend-active">進行中</span>
+        </div>
+      </div>
+      <div class="bulk-toolbar">
+        <div class="bulk-range">
+          <label for="delete-before-date">刪除日期或之前</label>
+          <input id="delete-before-date" type="date">
+          <button class="btn btn-danger-ghost" id="delete-before-btn" type="button">刪除</button>
+        </div>
+        <button class="btn btn-danger-ghost" id="clear-all-btn" type="button">清空全部</button>
+      </div>
+      <div class="schedule-wrap" id="schedule-wrap">
+        <div class="rail" id="rail" aria-hidden="true"></div>
+        <div class="schedule-body" id="schedule-body"></div>
+      </div>
+    </section>
+
+    <aside class="panel form-panel">
+      <div class="panel-head">
+        <h2 id="form-title">新增時間段</h2>
+      </div>
+      <form id="entry-form" autocomplete="off">
+        <div class="form-grid">
+          <div class="field">
+            <label for="field-date">日期</label>
+            <input id="field-date" name="date" type="date" required>
+          </div>
+          <div class="field">
+            <label for="field-time">開始時間</label>
+            <input id="field-time" name="time" type="time" required>
+          </div>
+          <div class="field field-wide">
+            <label for="field-content">內容</label>
+            <input id="field-content" name="content" placeholder="例如 檢查設備" required>
+          </div>
+          <div class="field">
+            <label for="field-owner">負責人</label>
+            <input id="field-owner" name="owner" list="owner-suggestions" placeholder="例如 張三" required>
+            <datalist id="owner-suggestions"></datalist>
+          </div>
+          <div class="field">
+            <label for="field-item">項目分鐘</label>
+            <input id="field-item" name="item" placeholder="例如 30 分鐘" required>
+          </div>
+          <div class="field field-wide">
+            <label for="field-description">描述</label>
+            <input id="field-description" name="description" placeholder="備註說明">
+          </div>
+          <div class="field field-wide">
+            <label for="field-end">結束時間</label>
+            <div class="end-row">
+              <input id="field-end" name="end_time" type="time" required>
+              <span class="duration-badge" id="duration-label">--</span>
+            </div>
+          </div>
+          <div class="field field-wide" id="relation-field">
+            <label for="field-relation">關聯</label>
+            <input id="field-relation" name="relation" placeholder="例如 c">
+          </div>
+        </div>
+
+        <div class="preview" id="form-preview">
+          <div class="preview-title">會自動新增兩列</div>
+          <div class="preview-line"><span class="preview-time" id="preview-start-time">--:--</span><span id="preview-start-op">開始</span></div>
+          <div class="preview-line"><span class="preview-time" id="preview-end-time">--:--</span><span id="preview-end-op">結束</span></div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" type="submit" id="submit-btn">完成</button>
+          <button class="btn btn-ghost" type="button" id="reset-form">重設</button>
+        </div>
+      </form>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="app.js?v=20260903a"></script>
+</body>
+</html>

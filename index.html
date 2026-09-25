@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>工程排程表</title>
-  <link rel="stylesheet" href="styles.css?v=20260903a">
+  <link rel="stylesheet" href="styles.css?v=20260925a">
 </head>
 <body>
   <header class="topbar">
@@ -39,6 +39,11 @@
           <button class="btn btn-danger-ghost" id="delete-before-btn" type="button">刪除</button>
         </div>
         <button class="btn btn-danger-ghost" id="clear-all-btn" type="button">清空全部</button>
+        <div class="bulk-range">
+          <button class="btn btn-ghost btn-sm" id="export-btn" type="button">匯出 JSON</button>
+          <button class="btn btn-ghost btn-sm" id="import-btn" type="button">匯入 JSON</button>
+          <input id="import-file" type="file" accept=".json,application/json" hidden>
+        </div>
       </div>
       <div class="schedule-wrap" id="schedule-wrap">
         <div class="rail" id="rail" aria-hidden="true"></div>
@@ -105,6 +110,6 @@
   </main>
 
   <div class="toast" id="toast" role="status"></div>
-  <script src="app.js?v=20260903a"></script>
+  <script src="app.js?v=20260925a"></script>
 </body>
 </html>

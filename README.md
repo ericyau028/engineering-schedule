@@ -29,6 +29,16 @@ python server.py
 - 批量刪除：可刪除指定日期或之前的所有時間段，或清空全部
 - 資料儲存在 `data/schedule.json`
 
+## 跨裝置同步（匯出／匯入）
+
+網頁版資料存在各瀏覽器的 localStorage，不同電腦之間**不會自動同步**。需要搬移資料時：
+
+1. **A 電腦**：時間表工具列按「匯出 JSON」→ 下載 `engineering-schedule-YYYY-MM-DD.json`
+2. 把檔案傳給 **B 電腦**（聊天／電郵／USB 皆可）
+3. **B 電腦**：按「匯入 JSON」→ 選取該檔案 → 資料寫入此瀏覽器並顯示
+
+注意：匯入只支援網頁版（此瀏覽器儲存）；本機伺服器模式請直接編輯 `data/schedule.json`。
+
 ## GitHub Pages 網頁版
 
 網頁版使用瀏覽器 localStorage 儲存資料：

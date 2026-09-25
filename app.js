@@ -604,6 +604,73 @@ async function loadSchedule() {
   updateModeChip();
 }
 
+function exportScheduleJson() {
+  const items = state.items || [];
+  if (!items.length) {
+    toast("目前沒有資料可匯出");
+    return;
+  }
+  const payload = {
+    items,
+    exported_at: serverNow().toISOString(),
+    count: items.length,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = makeEl("a");
+  a.href = url;
+  a.download = `engineering-schedule-${hkDateString(serverNow())}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function importScheduleJson(file) {
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const raw = Array.isArray(parsed)
+        ? parsed
+        : parsed && Array.isArray(parsed.items)
+          ? parsed.items
+          : null;
+      if (!raw) throw new Error("找不到時間表陣列（需為陣列或 {\"items\":[...]}）");
+      const items = raw.filter(
+        (i) => i && typeof i === "object" && (i.datetime || (i.date && i.time)),
+      );
+      if (!items.length && raw.length) throw new Error("資料格式無法辨識");
+      if (state.storageMode !== "local") {
+        toast("本機伺服器模式請直接編輯 data/schedule.json", true);
+        return;
+      }
+      state.items = items;
+      saveLocalItems(items);
+      await loadSchedule();
+      toast(`已匯入 ${items.length} 列（已儲存到此瀏覽器）`);
+    } catch (err) {
+      toast(`匯入失敗：${err.message}`, true);
+    }
+  };
+  reader.onerror = () => toast("讀取檔案失敗", true);
+  reader.readAsText(file, "utf-8");
+}
+
+function bindSyncEvents() {
+  document.getElementById("export-btn").addEventListener("click", exportScheduleJson);
+  document.getElementById("import-btn").addEventListener("click", () => {
+    document.getElementById("import-file").click();
+  });
+  document.getElementById("import-file").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) importScheduleJson(file);
+    e.target.value = "";
+  });
+}
+
 function bindFormEvents() {
   const form = document.getElementById("entry-form");
   form.addEventListener("submit", async (e) => {
@@ -771,6 +838,7 @@ function bindFormEvents() {
 
 function init() {
   bindFormEvents();
+  bindSyncEvents();
   resetForm();
   loadSchedule().catch((err) => {
     toast(err.message, true);

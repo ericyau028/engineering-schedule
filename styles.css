@@ -780,6 +780,12 @@ select {
   background: #f4f7fa;
 }
 
+.btn-sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
 .toast {
   position: fixed;
   left: 50%;
